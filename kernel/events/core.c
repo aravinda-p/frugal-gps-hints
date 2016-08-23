@@ -3550,7 +3550,7 @@ static void free_event_rcu(struct rcu_head *head)
 	if (event->ns)
 		put_pid_ns(event->ns);
 	perf_event_free_filter(event);
-	kfree(event);
+	kfree_unhint(event);
 }
 
 static void ring_buffer_attach(struct perf_event *event,
@@ -3731,6 +3731,7 @@ static void _free_event(struct perf_event *event)
 		module_put(event->pmu->module);
 	}
 
+	kfree_hint(event);
 	call_rcu(&event->rcu_head, free_event_rcu);
 }
 
