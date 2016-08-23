@@ -481,7 +481,7 @@ static void rcu_free_kmmio_fault_pages(struct rcu_head *head)
 		kfree(f);
 		f = next;
 	}
-	kfree(dr);
+	kfree_unhint(dr);
 }
 
 static void remove_kmmio_fault_pages(struct rcu_head *head)
@@ -507,6 +507,7 @@ static void remove_kmmio_fault_pages(struct rcu_head *head)
 	spin_unlock_irqrestore(&kmmio_lock, flags);
 
 	/* This is the real RCU destroy call. */
+	kfree_hint(dr);
 	call_rcu(&dr->rcu, rcu_free_kmmio_fault_pages);
 }
 

@@ -3570,7 +3570,10 @@ static void ext4_mb_put_pa(struct ext4_allocation_context *ac,
 	list_del_rcu(&pa->pa_inode_list);
 	spin_unlock(pa->pa_obj_lock);
 
+	kmem_cache_free_deferred(ext4_pspace_cachep, pa, &(pa)->u.pa_rcu);
+#if 0
 	call_rcu(&(pa)->u.pa_rcu, ext4_mb_pa_callback);
+#endif
 }
 
 /*
@@ -3922,7 +3925,10 @@ repeat:
 			ext4_mb_release_inode_pa(&e4b, bitmap_bh, pa);
 
 		list_del(&pa->u.pa_tmp_list);
+		kmem_cache_free_deferred(ext4_pspace_cachep, pa, &(pa)->u.pa_rcu);
+#if 0
 		call_rcu(&(pa)->u.pa_rcu, ext4_mb_pa_callback);
+#endif
 	}
 
 out:
@@ -4040,7 +4046,10 @@ repeat:
 		put_bh(bitmap_bh);
 
 		list_del(&pa->u.pa_tmp_list);
+		kmem_cache_free_deferred(ext4_pspace_cachep, pa, &(pa)->u.pa_rcu);
+#if 0
 		call_rcu(&(pa)->u.pa_rcu, ext4_mb_pa_callback);
+#endif
 	}
 }
 
@@ -4288,7 +4297,10 @@ ext4_mb_discard_lg_preallocations(struct super_block *sb,
 
 		ext4_mb_unload_buddy(&e4b);
 		list_del(&pa->u.pa_tmp_list);
+		kmem_cache_free_deferred(ext4_pspace_cachep, pa, &(pa)->u.pa_rcu);
+#if 0
 		call_rcu(&(pa)->u.pa_rcu, ext4_mb_pa_callback);
+#endif
 	}
 }
 
