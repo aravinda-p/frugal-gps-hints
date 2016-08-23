@@ -54,6 +54,7 @@ static void *slab_alloc_node_def(struct kmem_cache *s,
 		        gfp_t gfpflags, int node, unsigned long addr);
 static int slub_idle_work(struct notifier_block *nb, unsigned long val,
 		        void *data);
+extern void need_another_gp(void);
 
 /*
 static struct notifier_block slub_idle_work_nb = {
@@ -3639,6 +3640,8 @@ static void inline pre_reap_page(struct kmem_cache *s,
 		cache_next->gp_seq = cur_gp + 1;
 		cache_next->last = object;
 		slab_unlock(page);
+	} else if (count > ((oo_objects(s->oo) - 2))) {
+		need_another_gp();
 	}
 
 	pre_move_page(s, page, new_count);
@@ -3647,7 +3650,7 @@ static void inline pre_reap_page(struct kmem_cache *s,
 static void slab_free_deferred(struct kmem_cache *s,
 		struct page *page, void *x, unsigned long addr)
 {
-		pre_reap_page(s, page, x);
+	pre_reap_page(s, page, x);
 
 	stat(s, DEFERRED_FREE);
 }

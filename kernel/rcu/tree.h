@@ -107,6 +107,8 @@
 extern int rcu_num_lvls;
 extern int rcu_num_nodes;
 
+void need_another_gp(void);
+
 /*
  * Dynticks per-CPU state.
  */

@@ -158,6 +158,7 @@ static void invoke_rcu_core(void);
 static void invoke_rcu_callbacks(struct rcu_state *rsp, struct rcu_data *rdp);
 static void rcu_report_exp_rdp(struct rcu_state *rsp,
 			       struct rcu_data *rdp, bool wake);
+static void rcu_gp_kthread_wake(struct rcu_state *rsp);
 
 /* rcuc/rcub kthread realtime priority */
 #ifdef CONFIG_RCU_KTHREAD_PRIO
@@ -592,6 +593,18 @@ static int rcu_future_needs_gp(struct rcu_state *rsp)
 	return READ_ONCE(*fp);
 }
 
+void need_another_gp(void)
+{
+	struct rcu_state *rsp = &rcu_sched_state;
+
+	if (rcu_gp_in_progress(rsp))
+		return;  /* No, a grace period is already in progress. */
+
+	WRITE_ONCE(rsp->gp_flags, RCU_GP_FLAG_INIT);
+	rcu_gp_kthread_wake(rsp);
+}
+EXPORT_SYMBOL_GPL(need_another_gp);
+
 /*
  * Does the current CPU require a not-yet-started grace period?
  * The caller must have disabled interrupts to prevent races with
@@ -606,6 +619,11 @@ cpu_needs_another_gp(struct rcu_state *rsp, struct rcu_data *rdp)
 		return false;  /* No, a grace period is already in progress. */
 	if (rcu_future_needs_gp(rsp))
 		return true;  /* Yes, a no-CBs CPU needs one. */
+
+	return false; /* No grace period needed. SLUB will decide when gp is
+					 required */
+
+#if 0
 	if (!rdp->nxttail[RCU_NEXT_TAIL])
 		return false;  /* No, this is a no-CBs (or offline) CPU. */
 	if (*rdp->nxttail[RCU_NEXT_READY_TAIL])
@@ -616,6 +634,7 @@ cpu_needs_another_gp(struct rcu_state *rsp, struct rcu_data *rdp)
 				 rdp->nxtcompleted[i]))
 			return true;  /* Yes, CBs for future grace period. */
 	return false; /* No grace period needed. */
+#endif
 }
 
 /*
@@ -2006,7 +2025,6 @@ static void rcu_gp_fqs(struct rcu_state *rsp, bool first_time)
 static void rcu_gp_cleanup(struct rcu_state *rsp)
 {
 	unsigned long gp_duration;
-	bool needgp = false;
 	int nocb = 0;
 	struct rcu_data *rdp;
 	struct rcu_node *rnp = rcu_get_root(rsp);
@@ -2043,7 +2061,7 @@ static void rcu_gp_cleanup(struct rcu_state *rsp)
 		WRITE_ONCE(rnp->completed, rsp->gpnum);
 		rdp = this_cpu_ptr(rsp->rda);
 		if (rnp == rdp->mynode)
-			needgp = __note_gp_changes(rsp, rnp, rdp) || needgp;
+			__note_gp_changes(rsp, rnp, rdp);
 		/* smp_mb() provided by prior unlock-lock pair. */
 		nocb += rcu_future_gp_cleanup(rsp, rnp);
 		raw_spin_unlock_irq(&rnp->lock);
@@ -2061,8 +2079,8 @@ static void rcu_gp_cleanup(struct rcu_state *rsp)
 	rsp->gp_state = RCU_GP_IDLE;
 	rdp = this_cpu_ptr(rsp->rda);
 	/* Advance CBs to reduce false positives below. */
-	needgp = rcu_advance_cbs(rsp, rnp, rdp) || needgp;
-	if (needgp || cpu_needs_another_gp(rsp, rdp)) {
+	rcu_advance_cbs(rsp, rnp, rdp);
+	if (cpu_needs_another_gp(rsp, rdp)) {
 		WRITE_ONCE(rsp->gp_flags, RCU_GP_FLAG_INIT);
 		trace_rcu_grace_period(rsp->name,
 				       READ_ONCE(rsp->gpnum),
@@ -2070,6 +2088,8 @@ static void rcu_gp_cleanup(struct rcu_state *rsp)
 	}
 	raw_spin_unlock_irq(&rnp->lock);
 }
+
+
 
 /*
  * Body of kthread that handles grace periods.
