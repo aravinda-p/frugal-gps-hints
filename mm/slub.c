@@ -55,9 +55,11 @@ static void *slab_alloc_node_def(struct kmem_cache *s,
 static int slub_idle_work(struct notifier_block *nb, unsigned long val,
 		        void *data);
 
+/*
 static struct notifier_block slub_idle_work_nb = {
 		    .notifier_call = slub_idle_work,
 };
+*/
 
 extern atomic_long_t seed;
 
@@ -1716,7 +1718,7 @@ static void *get_partial_node(struct kmem_cache *s, struct kmem_cache_node *n,
 {
 	struct page *page, *page2, *best = NULL;
 	void *object = NULL;
-	int objects, best_free = 0, count = 10;
+	int objects;
 
 	/*
 	 * Racy check. If we mistakenly see no partial slabs then we
@@ -1734,19 +1736,20 @@ static void *get_partial_node(struct kmem_cache *s, struct kmem_cache_node *n,
 		if (!pfmemalloc_match(page, flags))
 			continue;
 
+		handle_page_lists(s, page);
+
 		free_objs = page->objects - page->inuse;
+
+		trace_slub_page(get_state_rcu_gpnum(), smp_processor_id(),
+			page->gp_cache[C_WAIT].gp_seq, page->gp_cache[C_WAIT].def_count,
+			page->gp_cache[C_NEXT].gp_seq, page->gp_cache[C_NEXT].def_count,
+			page->inuse, free_objs, n->nr_partial, s->min_partial, s->name);
+
 		if (unlikely(!free_objs))
 			continue;
 
-		if (free_objs > best_free) {
-			best = page;
-			best_free = free_objs;
-		}
-
-		if (!count)
-			break;
-
-		count--;
+		best = page;
+		break;
 	}
 
 	if (!best)
@@ -2899,6 +2902,7 @@ static inline void calculate_avg(struct kmem_cache *s, struct kmem_cache_cpu *c,
 #endif
 }
 
+#if 0
 /*
  * Perform processing of deferred objects when the thread has no other
  * work to do and is about to enter idle state
@@ -2923,6 +2927,7 @@ static short process_idle(struct kmem_cache *s)
 				cpu == (s->seed + 16) || cpu == (s->seed + 24)))
 		n = get_node(s, numa_mem_id());
 
+#if 0
 	if (cur_gp != c->gp_seq) {
 		calculate_avg(s, c, cur_gp);
 		/* Handle list move operations depending on the grace period */
@@ -2945,7 +2950,6 @@ static short process_idle(struct kmem_cache *s)
 	 *
 	 * aggressive reclaim level: 0 = low, 1 = moderate, 2 = high
 	 */
-#if 0
 	if (c->alloc_rate <= 3) {
 		obj_limit = 0;
 	} else if (c->alloc_rate < oo_objects(s->oo)) {
@@ -2958,7 +2962,6 @@ static short process_idle(struct kmem_cache *s)
 	} else {
 		obj_limit = c->alloc_rate;
 	}
-#endif
 
 	if (c->alloc_rate <= 4 && c->alloc_count <= 4) {
 		obj_limit = 0;
@@ -3000,8 +3003,10 @@ static short process_idle(struct kmem_cache *s)
 	trace_idle_work(c->gp_seq, smp_processor_id(), c->alloc_rate, 0, c->total_objs,
 			s->name);
 
+#endif
 	if (need_resched())
 		return 1;
+
 
 page_process:
 
@@ -3078,6 +3083,7 @@ static int slub_idle_work(struct notifier_block *nb, unsigned long val,
 	local_irq_disable();
 	return 0;
 }
+#endif
 
 /*
  * Slow path. The lockless freelist is empty or we need to perform
@@ -3276,27 +3282,14 @@ redo:
 	object = c->freelist;
 	page = c->page;
 	if (unlikely(!object || !node_match(page, node))) {
-		unsigned long cur_gp = get_state_rcu_gpnum();
-
 		VM_BUG_ON(c->total_objs);
 
 		stat(s, ALLOC_SLOWPATH);
-
-		if (unlikely(cur_gp != c->gp_seq)) {
-			calculate_avg(s, c, cur_gp);
-			/* Handle list move operations depending on the grace period */
-			handle_lists(s, c, cur_gp);
-		}
-
-		object = c->freelist;
-		if (object)
-			goto b1;
 
 		/* Fliping and merging can be considered based on alloc rate*/
 		object = __slab_alloc(s, gfpflags, node, addr, c);
 	} else {
 		stat(s, ALLOC_FASTPATH);
-b1:
 		next_object = get_freepointer_safe(s, object);
 
 		/*
