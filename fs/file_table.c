@@ -52,8 +52,13 @@ static void file_free_rcu(struct rcu_head *head)
 static inline void file_free(struct file *f)
 {
 	percpu_counter_dec(&nr_files);
-	kmem_cache_free_hint(filp_cachep, f);
+
+	put_cred(f->f_cred);
+	kmem_cache_free_deferred(filp_cachep, f, NULL);
+
+#if 0
 	call_rcu(&f->f_u.fu_rcuhead, file_free_rcu);
+#endif
 }
 
 /*
@@ -120,7 +125,7 @@ struct file *get_empty_filp(void)
 			goto over;
 	}
 
-	f = kmem_cache_zalloc(filp_cachep, GFP_KERNEL);
+	f = kmem_cache_zalloc_def(filp_cachep, GFP_KERNEL);
 	if (unlikely(!f))
 		return ERR_PTR(-ENOMEM);
 
