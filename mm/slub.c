@@ -63,6 +63,7 @@ static struct notifier_block slub_idle_work_nb = {
 */
 
 extern atomic_long_t seed;
+atomic_long_t slab_mem;
 
 #define incr_def_count(s, page) update_def_count(s, page, 1);
 #define decr_def_count(s, page) update_def_count(s, page, 0);
@@ -1535,6 +1536,9 @@ out:
 		NR_SLAB_RECLAIMABLE : NR_SLAB_UNRECLAIMABLE,
 		1 << oo_order(oo));
 
+	atomic_long_add(1 << oo_order(oo), &slab_mem);
+	trace_mem_slab(atomic_long_read(&slab_mem));
+
 	inc_slabs_node(s, page_to_nid(page), page->objects);
 
 	return page;
@@ -1571,6 +1575,9 @@ static void __free_slab(struct kmem_cache *s, struct page *page)
 		(s->flags & SLAB_RECLAIM_ACCOUNT) ?
 		NR_SLAB_RECLAIMABLE : NR_SLAB_UNRECLAIMABLE,
 		-pages);
+
+	atomic_long_sub(pages, &slab_mem);
+	trace_mem_slab(atomic_long_read(&slab_mem));
 
 	__ClearPageSlabPfmemalloc(page);
 	__ClearPageSlab(page);

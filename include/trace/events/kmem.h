@@ -527,6 +527,24 @@ TRACE_EVENT(slub_page,
 		__entry->slab)
 );
 
+TRACE_EVENT(mem_slab,
+
+	TP_PROTO(unsigned long slab_mem),
+
+	TP_ARGS(slab_mem),
+
+	TP_STRUCT__entry(
+		__field(        unsigned long, slab_mem              )
+	),
+
+	TP_fast_assign(
+		__entry->slab_mem = slab_mem;
+	),
+
+	TP_printk("slab_mem=%ld",
+		__entry->slab_mem)
+);
+
 TRACE_EVENT(merge_page,
 
 	TP_PROTO(unsigned long gp, int cpu, int was_frozen,
