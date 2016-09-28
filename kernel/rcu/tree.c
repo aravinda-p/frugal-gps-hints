@@ -662,10 +662,6 @@ static void rcu_eqs_enter_common(long long oldval, bool user)
 			  current->pid, current->comm,
 			  idle->pid, idle->comm); /* must be idle task! */
 	}
-	for_each_rcu_flavor(rsp) {
-		rdp = this_cpu_ptr(rsp->rda);
-		do_nocb_deferred_wakeup(rdp);
-	}
 	rcu_prepare_for_idle();
 	/* CPUs seeing atomic_inc() must see prior RCU read-side crit sects */
 	smp_mb__before_atomic();  /* See above. */

@@ -1966,6 +1966,17 @@ static void __call_rcu_nocb_enqueue(struct rcu_data *rdp,
 		}
 		rdp->qlen_last_fqs_check = LONG_MAX / 2;
 	} else {
+		if (!irqs_disabled_flags(flags)) {
+			/* ... if queue was empty ... */
+			wake_nocb_leader(rdp, false);
+			trace_rcu_nocb_wake(rdp->rsp->name, rdp->cpu,
+					    TPS("WakeEmpty"));
+		} else {
+			rdp->nocb_defer_wakeup = RCU_NOGP_WAKE;
+			trace_rcu_nocb_wake(rdp->rsp->name, rdp->cpu,
+					    TPS("WakeEmptyIsDeferred"));
+		}
+		rdp->qlen_last_fqs_check = 0;
 		trace_rcu_nocb_wake(rdp->rsp->name, rdp->cpu, TPS("WakeNot"));
 	}
 	return;
