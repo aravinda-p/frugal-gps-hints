@@ -2065,14 +2065,11 @@ static void rcu_nocb_wait_gp(struct rcu_data *rdp)
 	unsigned long c;
 	bool d;
 	unsigned long flags;
-	bool needwake;
 	struct rcu_node *rnp = rdp->mynode;
 
 	raw_spin_lock_irqsave_rcu_node(rnp, flags);
-	needwake = rcu_start_future_gp(rnp, rdp, &c);
+	rcu_start_future_gp(rnp, rdp, &c);
 	raw_spin_unlock_irqrestore(&rnp->lock, flags);
-	if (needwake)
-		rcu_gp_kthread_wake(rdp->rsp);
 
 	/*
 	 * Wait for the grace period.  Do so interruptibly to avoid messing

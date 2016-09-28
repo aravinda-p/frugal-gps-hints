@@ -1778,20 +1778,7 @@ static bool rcu_advance_cbs(struct rcu_state *rsp, struct rcu_node *rnp,
 static bool __note_gp_changes(struct rcu_state *rsp, struct rcu_node *rnp,
 			      struct rcu_data *rdp)
 {
-	bool ret;
-
-	/* Handle the ends of any preceding grace periods first. */
-	if (rdp->completed == rnp->completed &&
-	    !unlikely(READ_ONCE(rdp->gpwrap))) {
-
-		/* No grace period end, so just accelerate recent callbacks. */
-		ret = rcu_accelerate_cbs(rsp, rnp, rdp);
-
-	} else {
-
-		/* Advance callbacks. */
-		ret = rcu_advance_cbs(rsp, rnp, rdp);
-
+	if (rdp->completed != rnp->completed) {
 		/* Remember that we saw this grace-period completion. */
 		rdp->completed = rnp->completed;
 		trace_rcu_grace_period(rsp->name, rdp->gpnum, TPS("cpuend"));
@@ -1811,13 +1798,12 @@ static bool __note_gp_changes(struct rcu_state *rsp, struct rcu_node *rnp,
 		zero_cpu_stall_ticks(rdp);
 		WRITE_ONCE(rdp->gpwrap, false);
 	}
-	return ret;
+	return false;
 }
 
 static void note_gp_changes(struct rcu_state *rsp, struct rcu_data *rdp)
 {
 	unsigned long flags;
-	bool needwake;
 	struct rcu_node *rnp;
 
 	local_irq_save(flags);
@@ -1829,10 +1815,8 @@ static void note_gp_changes(struct rcu_state *rsp, struct rcu_data *rdp)
 		local_irq_restore(flags);
 		return;
 	}
-	needwake = __note_gp_changes(rsp, rnp, rdp);
+	__note_gp_changes(rsp, rnp, rdp);
 	raw_spin_unlock_irqrestore(&rnp->lock, flags);
-	if (needwake)
-		rcu_gp_kthread_wake(rsp);
 }
 
 static void rcu_gp_slow(struct rcu_state *rsp, int delay)
@@ -2074,8 +2058,6 @@ static void rcu_gp_cleanup(struct rcu_state *rsp)
 	trace_rcu_grace_period(rsp->name, rsp->completed, TPS("end"));
 	rsp->gp_state = RCU_GP_IDLE;
 	rdp = this_cpu_ptr(rsp->rda);
-	/* Advance CBs to reduce false positives below. */
-	rcu_advance_cbs(rsp, rnp, rdp);
 	if (cpu_needs_another_gp(rsp, rdp)) {
 		WRITE_ONCE(rsp->gp_flags, RCU_GP_FLAG_INIT);
 		trace_rcu_grace_period(rsp->name,
@@ -2408,16 +2390,8 @@ rcu_report_qs_rdp(int cpu, struct rcu_state *rsp, struct rcu_data *rdp)
 	} else {
 		rdp->core_needs_qs = 0;
 
-		/*
-		 * This GP can't end until cpu checks in, so all of our
-		 * callbacks can be processed during the next GP.
-		 */
-		needwake = rcu_accelerate_cbs(rsp, rnp, rdp);
-
 		rcu_report_qs_rnp(mask, rsp, rnp, rnp->gpnum, flags);
 		/* ^^^ Released rnp->lock */
-		if (needwake)
-			rcu_gp_kthread_wake(rsp);
 	}
 }
 
