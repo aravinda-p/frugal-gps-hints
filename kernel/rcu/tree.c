@@ -718,12 +718,6 @@ static void rcu_eqs_enter(bool user)
  */
 void rcu_idle_enter(void)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
-	rcu_eqs_enter(false);
-	rcu_sysidle_enter(0);
-	local_irq_restore(flags);
 }
 EXPORT_SYMBOL_GPL(rcu_idle_enter);
 
@@ -738,7 +732,6 @@ EXPORT_SYMBOL_GPL(rcu_idle_enter);
  */
 void rcu_user_enter(void)
 {
-	rcu_eqs_enter(1);
 }
 #endif /* CONFIG_NO_HZ_FULL */
 
@@ -760,20 +753,6 @@ void rcu_user_enter(void)
  */
 void rcu_irq_exit(void)
 {
-	long long oldval;
-	struct rcu_dynticks *rdtp;
-
-	RCU_LOCKDEP_WARN(!irqs_disabled(), "rcu_irq_exit() invoked with irqs enabled!!!");
-	rdtp = this_cpu_ptr(&rcu_dynticks);
-	oldval = rdtp->dynticks_nesting;
-	rdtp->dynticks_nesting--;
-	WARN_ON_ONCE(IS_ENABLED(CONFIG_RCU_EQS_DEBUG) &&
-		     rdtp->dynticks_nesting < 0);
-	if (rdtp->dynticks_nesting)
-		trace_rcu_dyntick(TPS("--="), oldval, rdtp->dynticks_nesting);
-	else
-		rcu_eqs_enter_common(oldval, true);
-	rcu_sysidle_enter(1);
 }
 
 /*
@@ -781,11 +760,6 @@ void rcu_irq_exit(void)
  */
 void rcu_irq_exit_irqson(void)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
-	rcu_irq_exit();
-	local_irq_restore(flags);
 }
 
 /*
@@ -855,12 +829,6 @@ static void rcu_eqs_exit(bool user)
  */
 void rcu_idle_exit(void)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
-	rcu_eqs_exit(false);
-	rcu_sysidle_exit(0);
-	local_irq_restore(flags);
 }
 EXPORT_SYMBOL_GPL(rcu_idle_exit);
 
@@ -873,7 +841,6 @@ EXPORT_SYMBOL_GPL(rcu_idle_exit);
  */
 void rcu_user_exit(void)
 {
-	rcu_eqs_exit(1);
 }
 #endif /* CONFIG_NO_HZ_FULL */
 
@@ -898,20 +865,6 @@ void rcu_user_exit(void)
  */
 void rcu_irq_enter(void)
 {
-	struct rcu_dynticks *rdtp;
-	long long oldval;
-
-	RCU_LOCKDEP_WARN(!irqs_disabled(), "rcu_irq_enter() invoked with irqs enabled!!!");
-	rdtp = this_cpu_ptr(&rcu_dynticks);
-	oldval = rdtp->dynticks_nesting;
-	rdtp->dynticks_nesting++;
-	WARN_ON_ONCE(IS_ENABLED(CONFIG_RCU_EQS_DEBUG) &&
-		     rdtp->dynticks_nesting == 0);
-	if (oldval)
-		trace_rcu_dyntick(TPS("++="), oldval, rdtp->dynticks_nesting);
-	else
-		rcu_eqs_exit_common(oldval, true);
-	rcu_sysidle_exit(1);
 }
 
 /*
@@ -919,11 +872,6 @@ void rcu_irq_enter(void)
  */
 void rcu_irq_enter_irqson(void)
 {
-	unsigned long flags;
-
-	local_irq_save(flags);
-	rcu_irq_enter();
-	local_irq_restore(flags);
 }
 
 /**
@@ -937,30 +885,6 @@ void rcu_irq_enter_irqson(void)
  */
 void rcu_nmi_enter(void)
 {
-	struct rcu_dynticks *rdtp = this_cpu_ptr(&rcu_dynticks);
-	int incby = 2;
-
-	/* Complain about underflow. */
-	WARN_ON_ONCE(rdtp->dynticks_nmi_nesting < 0);
-
-	/*
-	 * If idle from RCU viewpoint, atomically increment ->dynticks
-	 * to mark non-idle and increment ->dynticks_nmi_nesting by one.
-	 * Otherwise, increment ->dynticks_nmi_nesting by two.  This means
-	 * if ->dynticks_nmi_nesting is equal to one, we are guaranteed
-	 * to be in the outermost NMI handler that interrupted an RCU-idle
-	 * period (observation due to Andy Lutomirski).
-	 */
-	if (!(atomic_read(&rdtp->dynticks) & 0x1)) {
-		smp_mb__before_atomic();  /* Force delay from prior write. */
-		atomic_inc(&rdtp->dynticks);
-		/* atomic_inc() before later RCU read-side crit sects */
-		smp_mb__after_atomic();  /* See above. */
-		WARN_ON_ONCE(!(atomic_read(&rdtp->dynticks) & 0x1));
-		incby = 1;
-	}
-	rdtp->dynticks_nmi_nesting += incby;
-	barrier();
 }
 
 /**
@@ -973,32 +897,6 @@ void rcu_nmi_enter(void)
  */
 void rcu_nmi_exit(void)
 {
-	struct rcu_dynticks *rdtp = this_cpu_ptr(&rcu_dynticks);
-
-	/*
-	 * Check for ->dynticks_nmi_nesting underflow and bad ->dynticks.
-	 * (We are exiting an NMI handler, so RCU better be paying attention
-	 * to us!)
-	 */
-	WARN_ON_ONCE(rdtp->dynticks_nmi_nesting <= 0);
-	WARN_ON_ONCE(!(atomic_read(&rdtp->dynticks) & 0x1));
-
-	/*
-	 * If the nesting level is not 1, the CPU wasn't RCU-idle, so
-	 * leave it in non-RCU-idle state.
-	 */
-	if (rdtp->dynticks_nmi_nesting != 1) {
-		rdtp->dynticks_nmi_nesting -= 2;
-		return;
-	}
-
-	/* This NMI interrupted an RCU-idle CPU, restore RCU-idleness. */
-	rdtp->dynticks_nmi_nesting = 0;
-	/* CPUs seeing atomic_inc() must see prior RCU read-side crit sects */
-	smp_mb__before_atomic();  /* See above. */
-	atomic_inc(&rdtp->dynticks);
-	smp_mb__after_atomic();  /* Force delay to next write. */
-	WARN_ON_ONCE(atomic_read(&rdtp->dynticks) & 0x1);
 }
 
 /**
