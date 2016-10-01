@@ -126,7 +126,7 @@ EXPORT_SYMBOL(rcu_read_lock_sched_held);
  */
 bool rcu_gp_is_normal(void)
 {
-	return READ_ONCE(rcu_normal);
+	return 1;
 }
 
 static atomic_t rcu_expedited_nesting =

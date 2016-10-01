@@ -364,13 +364,11 @@ EXPORT_SYMBOL_GPL(rcu_note_context_switch);
  */
 void rcu_all_qs(void)
 {
-	unsigned long flags;
-
 	barrier(); /* Avoid RCU read-side critical sections leaking down. */
 	if (unlikely(raw_cpu_read(rcu_sched_qs_mask))) {
-		local_irq_save(flags);
-		rcu_momentary_dyntick_idle();
-		local_irq_restore(flags);
+		struct rcu_dynticks *rdtp = this_cpu_ptr(&rcu_dynticks);
+		raw_cpu_write(rcu_sched_qs_mask, 0);
+		atomic_add(2, &rdtp->dynticks);  /* QS. */
 	}
 	this_cpu_inc(rcu_qs_ctr);
 	barrier(); /* Avoid RCU read-side critical sections leaking up. */
@@ -993,16 +991,7 @@ static int dyntick_save_progress_counter(struct rcu_data *rdp,
 					 bool *isidle, unsigned long *maxj)
 {
 	rdp->dynticks_snap = atomic_add_return(0, &rdp->dynticks->dynticks);
-	rcu_sysidle_check_cpu(rdp, isidle, maxj);
-	if ((rdp->dynticks_snap & 0x1) == 0) {
-		trace_rcu_fqs(rdp->rsp->name, rdp->gpnum, rdp->cpu, TPS("dti"));
-		return 1;
-	} else {
-		if (ULONG_CMP_LT(READ_ONCE(rdp->gpnum) + ULONG_MAX / 4,
-				 rdp->mynode->gpnum))
-			WRITE_ONCE(rdp->gpwrap, true);
-		return 0;
-	}
+	return 0;
 }
 
 /*
@@ -1875,14 +1864,8 @@ static void rcu_gp_fqs(struct rcu_state *rsp, bool first_time)
 	WRITE_ONCE(rsp->gp_activity, jiffies);
 	rsp->n_force_qs++;
 	if (first_time) {
-		/* Collect dyntick-idle snapshots. */
-		if (is_sysidle_rcu_state(rsp)) {
-			isidle = true;
-			maxj = jiffies - ULONG_MAX / 4;
-		}
 		force_qs_rnp(rsp, dyntick_save_progress_counter,
 			     &isidle, &maxj);
-		rcu_sysidle_report_gp(rsp, isidle, maxj);
 	} else {
 		/* Handle dyntick-idle and offline CPUs. */
 		isidle = true;
@@ -2019,7 +2002,7 @@ static int __noreturn rcu_gp_kthread(void *arg)
 					       TPS("fqswait"));
 			rsp->gp_state = RCU_GP_WAIT_FQS;
 			ret = wait_event_interruptible_timeout(rsp->gp_wq,
-					rcu_gp_fqs_check_wake(rsp, &gf), j);
+					rcu_gp_fqs_check_wake(rsp, &gf), first_gp_fqs? j : j * 6);
 			rsp->gp_state = RCU_GP_DOING_FQS;
 			/* Locking provides needed memory barriers. */
 			/* If grace period done, leave loop. */
@@ -2048,7 +2031,7 @@ static int __noreturn rcu_gp_kthread(void *arg)
 						       READ_ONCE(rsp->gpnum),
 						       TPS("fqswaitsig"));
 			}
-			j = jiffies_till_next_fqs;
+			j = jiffies_till_next_fqs + 10;
 			if (j > HZ) {
 				j = HZ;
 				jiffies_till_next_fqs = HZ;
