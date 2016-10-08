@@ -341,9 +341,11 @@ void rcu_note_context_switch(void)
 	barrier(); /* Avoid RCU read-side critical sections leaking down. */
 	trace_rcu_utilization(TPS("Start context switch"));
 	rcu_sched_qs();
-	rcu_preempt_note_context_switch();
-	if (unlikely(raw_cpu_read(rcu_sched_qs_mask)))
-		rcu_momentary_dyntick_idle();
+	if (unlikely(raw_cpu_read(rcu_sched_qs_mask))) {
+               struct rcu_dynticks *rdtp = this_cpu_ptr(&rcu_dynticks);
+               raw_cpu_write(rcu_sched_qs_mask, 0);
+               atomic_add(2, &rdtp->dynticks);  /* QS. */
+	}
 	trace_rcu_utilization(TPS("End context switch"));
 	barrier(); /* Avoid RCU read-side critical sections leaking up. */
 }
@@ -365,11 +367,13 @@ EXPORT_SYMBOL_GPL(rcu_note_context_switch);
 void rcu_all_qs(void)
 {
 	barrier(); /* Avoid RCU read-side critical sections leaking down. */
+#if 0
 	if (unlikely(raw_cpu_read(rcu_sched_qs_mask))) {
-		struct rcu_dynticks *rdtp = this_cpu_ptr(&rcu_dynticks);
-		raw_cpu_write(rcu_sched_qs_mask, 0);
-		atomic_add(2, &rdtp->dynticks);  /* QS. */
+               struct rcu_dynticks *rdtp = this_cpu_ptr(&rcu_dynticks);
+               raw_cpu_write(rcu_sched_qs_mask, 0);
+               atomic_add(2, &rdtp->dynticks);  /* QS. */
 	}
+#endif
 	this_cpu_inc(rcu_qs_ctr);
 	barrier(); /* Avoid RCU read-side critical sections leaking up. */
 }
@@ -1018,7 +1022,7 @@ static int rcu_implicit_dynticks_qs(struct rcu_data *rdp,
 	 * read-side critical section that started before the beginning
 	 * of the current RCU grace period.
 	 */
-	if ((curr & 0x1) == 0 || UINT_CMP_GE(curr, snap + 2)) {
+	if (UINT_CMP_GE(curr, snap + 2)) {
 		trace_rcu_fqs(rdp->rsp->name, rdp->gpnum, rdp->cpu, TPS("dti"));
 		rdp->dynticks_fqs++;
 		return 1;
@@ -1688,6 +1692,12 @@ static bool __note_gp_changes(struct rcu_state *rsp, struct rcu_node *rnp,
 	return false;
 }
 
+static void inline __note_gp_changes_cpu(struct rcu_data *rdp, int cpu)
+{
+	rdp->cpu_no_qs.b.norm = true;
+	rdp->rcu_qs_ctr_snap = per_cpu(rcu_qs_ctr, cpu);
+}
+
 static void note_gp_changes(struct rcu_state *rsp, struct rcu_data *rdp)
 {
 	unsigned long flags;
@@ -1719,8 +1729,10 @@ static void rcu_gp_slow(struct rcu_state *rsp, int delay)
 static bool rcu_gp_init(struct rcu_state *rsp)
 {
 	unsigned long oldmask;
+	unsigned long flags;
 	struct rcu_data *rdp;
 	struct rcu_node *rnp = rcu_get_root(rsp);
+	int cpu;
 
 	WRITE_ONCE(rsp->gp_activity, jiffies);
 	raw_spin_lock_irq_rcu_node(rnp);
@@ -1828,6 +1840,16 @@ static bool rcu_gp_init(struct rcu_state *rsp)
 		cond_resched_rcu_qs();
 		WRITE_ONCE(rsp->gp_activity, jiffies);
 	}
+
+	rcu_for_each_leaf_node(rsp, rnp) {
+		raw_spin_lock_irqsave_rcu_node(rnp, flags);
+		cpu = rnp->grplo;
+		for (; cpu <= rnp->grphi; cpu++) {
+			(void)__note_gp_changes_cpu(per_cpu_ptr(rsp->rda, cpu), cpu);
+		}
+		raw_spin_unlock_irqrestore(&rnp->lock, flags);
+	    cond_resched_rcu_qs();
+    }
 
 	return true;
 }
@@ -2002,7 +2024,7 @@ static int __noreturn rcu_gp_kthread(void *arg)
 					       TPS("fqswait"));
 			rsp->gp_state = RCU_GP_WAIT_FQS;
 			ret = wait_event_interruptible_timeout(rsp->gp_wq,
-					rcu_gp_fqs_check_wake(rsp, &gf), first_gp_fqs? j : j * 6);
+					rcu_gp_fqs_check_wake(rsp, &gf), first_gp_fqs? j * 2 : j * 8);
 			rsp->gp_state = RCU_GP_DOING_FQS;
 			/* Locking provides needed memory barriers. */
 			/* If grace period done, leave loop. */
@@ -2687,6 +2709,7 @@ static void force_qs_rnp(struct rcu_state *rsp,
 	unsigned long flags;
 	unsigned long mask;
 	struct rcu_node *rnp;
+	struct rcu_data *rdp;
 
 	rcu_for_each_leaf_node(rsp, rnp) {
 		cond_resched_rcu_qs();
@@ -2721,8 +2744,13 @@ static void force_qs_rnp(struct rcu_state *rsp,
 		bit = 1;
 		for (; cpu <= rnp->grphi; cpu++, bit <<= 1) {
 			if ((rnp->qsmask & bit) != 0) {
-				if (f(per_cpu_ptr(rsp->rda, cpu), isidle, maxj))
+				rdp = per_cpu_ptr(rsp->rda, cpu);
+				if (!rdp->cpu_no_qs.b.norm ||
+					 rdp->rcu_qs_ctr_snap != per_cpu(rcu_qs_ctr, cpu)) {
 					mask |= bit;
+				} else if (f(rdp, isidle, maxj)) {
+					mask |= bit;
+				}
 			}
 		}
 		if (mask != 0) {
