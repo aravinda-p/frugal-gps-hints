@@ -1963,7 +1963,7 @@ static int __noreturn rcu_gp_kthread(void *arg)
 					       TPS("fqswait"));
 			rsp->gp_state = RCU_GP_WAIT_FQS;
 			ret = wait_event_interruptible_timeout(rsp->gp_wq,
-					rcu_gp_fqs_check_wake(rsp, &gf), nr_gp_fqs == 1? j * 2 : j * 8);
+					rcu_gp_fqs_check_wake(rsp, &gf), nr_gp_fqs == 1? j : j * 6);
 			rsp->gp_state = RCU_GP_DOING_FQS;
 			/* Locking provides needed memory barriers. */
 			/* If grace period done, leave loop. */
@@ -2646,6 +2646,7 @@ static void force_qs_rnp(struct rcu_state *rsp, short nr_time)
 	unsigned long mask;
 	struct rcu_node *rnp;
 	struct rcu_data *rdp;
+	bool ret_flag = 0;
 
 	rcu_for_each_leaf_node(rsp, rnp) {
 		cond_resched_rcu_qs();
@@ -2658,13 +2659,18 @@ static void force_qs_rnp(struct rcu_state *rsp, short nr_time)
 		for (; cpu <= rnp->grphi; cpu++, bit <<= 1) {
 			if ((rnp->qsmask & bit) != 0) {
 				rdp = per_cpu_ptr(rsp->rda, cpu);
-				if (!rdp->cpu_no_qs.b.norm ||
+				if (!rdp->cpu_no_qs.b.norm || per_cpu(context_tracking.state, cpu) == 1 ||
 					 rdp->rcu_qs_ctr_snap != per_cpu(rcu_qs_ctr, cpu)) {
 					mask |= bit;
 				} else if (nr_time == 1) {
-					return;
-				} else if (rcu_implicit_dynticks_qs(rdp)) {
-					mask |= bit;
+					if (mask == 0)
+						return;
+					else
+						ret_flag = 1;
+						break;
+				} else {
+					rcu_implicit_dynticks_qs(rdp);
+					ret_flag = 1;
 				}
 			}
 		}
@@ -2673,6 +2679,8 @@ static void force_qs_rnp(struct rcu_state *rsp, short nr_time)
 			raw_spin_lock_irqsave_rcu_node(rnp, flags);
 			rcu_report_qs_rnp(mask, rsp, rnp, rnp->gpnum, flags);
 		}
+		if (ret_flag)
+			return;
 	}
 }
 
@@ -3743,46 +3751,10 @@ static int __rcu_pending(struct rcu_state *rsp, struct rcu_data *rdp)
 	if (rcu_nohz_full_cpu(rsp))
 		return 0;
 
-	/* Is the RCU core waiting for a quiescent state from this CPU? */
-	if (rcu_scheduler_fully_active &&
-	    rdp->core_needs_qs && rdp->cpu_no_qs.b.norm &&
-	    rdp->rcu_qs_ctr_snap == __this_cpu_read(rcu_qs_ctr)) {
-		rdp->n_rp_core_needs_qs++;
-	} else if (rdp->core_needs_qs &&
-		   (!rdp->cpu_no_qs.b.norm ||
-		    rdp->rcu_qs_ctr_snap != __this_cpu_read(rcu_qs_ctr))) {
-		rdp->n_rp_report_qs++;
-		return 1;
-	}
-
-	/* Does this CPU have callbacks ready to invoke? */
-	if (cpu_has_callbacks_ready_to_invoke(rdp)) {
-		rdp->n_rp_cb_ready++;
-		return 1;
-	}
 
 	/* Has RCU gone idle with this CPU needing another grace period? */
 	if (cpu_needs_another_gp(rsp, rdp)) {
 		rdp->n_rp_cpu_needs_gp++;
-		return 1;
-	}
-
-	/* Has another RCU grace period completed?  */
-	if (READ_ONCE(rnp->completed) != rdp->completed) { /* outside lock */
-		rdp->n_rp_gp_completed++;
-		return 1;
-	}
-
-	/* Has a new RCU grace period started? */
-	if (READ_ONCE(rnp->gpnum) != rdp->gpnum ||
-	    unlikely(READ_ONCE(rdp->gpwrap))) { /* outside lock */
-		rdp->n_rp_gp_started++;
-		return 1;
-	}
-
-	/* Does this CPU need a deferred NOCB wakeup? */
-	if (rcu_nocb_need_deferred_wakeup(rdp)) {
-		rdp->n_rp_nocb_defer_wakeup++;
 		return 1;
 	}
 
