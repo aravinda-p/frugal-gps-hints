@@ -1537,7 +1537,7 @@ out:
 		1 << oo_order(oo));
 
 	atomic_long_add(1 << oo_order(oo), &slab_mem);
-	trace_mem_slab(atomic_long_read(&slab_mem));
+	trace_mem_slab(atomic_long_read(&slab_mem), s->name);
 
 	inc_slabs_node(s, page_to_nid(page), page->objects);
 
@@ -1577,7 +1577,7 @@ static void __free_slab(struct kmem_cache *s, struct page *page)
 		-pages);
 
 	atomic_long_sub(pages, &slab_mem);
-	trace_mem_slab(atomic_long_read(&slab_mem));
+	trace_mem_slab(atomic_long_read(&slab_mem), s->name);
 
 	__ClearPageSlabPfmemalloc(page);
 	__ClearPageSlab(page);

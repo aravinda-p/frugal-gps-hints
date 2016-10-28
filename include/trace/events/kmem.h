@@ -529,20 +529,22 @@ TRACE_EVENT(slub_page,
 
 TRACE_EVENT(mem_slab,
 
-	TP_PROTO(unsigned long slab_mem),
+	TP_PROTO(unsigned long slab_mem, char *name),
 
-	TP_ARGS(slab_mem),
+	TP_ARGS(slab_mem, name),
 
 	TP_STRUCT__entry(
 		__field(        unsigned long, slab_mem              )
+		__field(        char *,		 name              )
 	),
 
 	TP_fast_assign(
 		__entry->slab_mem = slab_mem;
+		__entry->name = name;
 	),
 
-	TP_printk("slab_mem=%ld",
-		__entry->slab_mem)
+	TP_printk("slab_mem=%ld name=%s",
+		__entry->slab_mem, __entry->name)
 );
 
 TRACE_EVENT(merge_page,
